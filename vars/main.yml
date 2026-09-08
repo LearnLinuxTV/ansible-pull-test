@@ -1,0 +1,31 @@
+---
+# Variables for local.yml. Edit this file, commit, and the next ansible-pull
+# run picks up the changes - the playbook itself doesn't need to be touched.
+
+# The user account to create.
+admin_user: automation
+
+# The group that grants sudo access. This is "sudo" on Debian and Ubuntu,
+# and "wheel" on Fedora, RHEL, openSUSE and Arch.
+admin_group: sudo
+
+# Packages to install and keep updated.
+packages:
+  - curl
+  - git
+  - htop
+  - tmux
+  - tree
+  - vim
+
+# System timezone. Run "timedatectl list-timezones" to see the valid values.
+system_timezone: Etc/UTC
+
+# Service to make sure is running. Note that OpenSSH is "ssh" on Debian and
+# Ubuntu, but "sshd" most other places.
+managed_service: ssh
+
+# The repository this playbook lives in. If you set it, the playbook installs
+# a cron job so the machine re-runs ansible-pull on its own every 30 minutes.
+# Leave it empty to skip that.
+ansible_pull_repo: ""
