@@ -13,10 +13,9 @@ admin_group: wheel
 packages:
   - curl
   - git
-  - htop
   - tmux
-  - tree
   - vim
+  - wget
 
 # System timezone. Run "timedatectl list-timezones" to see the valid values.
 system_timezone: Etc/UTC
