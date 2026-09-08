@@ -7,7 +7,7 @@ admin_user: automation
 
 # The group that grants sudo access. This is "sudo" on Debian and Ubuntu,
 # and "wheel" on Fedora, RHEL, openSUSE and Arch.
-admin_group: wheel
+admin_group: sudo
 
 # Packages to install and keep updated.
 packages:
@@ -21,7 +21,7 @@ packages:
 system_timezone: Etc/UTC
 
 # Service to make sure is running.
-managed_service: sshd
+managed_service: ssh
 
 # The repository this playbook lives in.
 ansible_pull_repo: "https://github.com/LearnLinuxTV/ansible-pull-test"
