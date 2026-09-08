@@ -1,366 +1,75 @@
 ---
-# =============================================================================
-# local.yml - a sample playbook for ansible-pull
-# =============================================================================
-#
-# ansible-pull clones a git repository onto the machine it's running on, and
-# then runs a playbook from that repo against the local machine. By default it
-# looks for a playbook named "local.yml" in the root of the repo, which is why
-# this file has that name.
-#
-# Basic usage:
-#
-#   ansible-pull -U https://github.com/<your-user>/<your-repo>.git
-#
-# Useful options:
-#
-#   -o    Only run the playbook if the repository has changed since last time
-#   -C    Check out a specific branch (default: the repo's default branch)
-#   -i    Provide an inventory file (usually not needed for ansible-pull)
-#   -K    Ask for the sudo password (omit when running as root)
-#
-# Since ansible-pull limits the run to the local machine's hostname, FQDN, and
-# "localhost", targeting "localhost" below works on every machine that pulls it.
-#
-# Everything here aims to be distro-agnostic. Where that's genuinely not
-# possible (full system upgrades, package name differences), the playbook uses
-# facts to branch instead of hard-coding a single distro.
-# =============================================================================
 
-- name: Baseline system configuration
+- name: Basic system setup
   hosts: localhost
   connection: local
   become: true
 
-  # ---------------------------------------------------------------------------
-  # Variables. In a real repo you'd usually move these into group_vars/all.yml
-  # so the playbook itself stays focused on tasks.
-  # ---------------------------------------------------------------------------
-  vars:
-    # Apply all pending package updates. Set to false if you'd rather patch
-    # manually and only use this playbook for configuration.
-    perform_upgrade: true
+  vars_files:
+    - vars/main.yml
 
-    # Packages that use the same name on virtually every distribution.
-    common_packages:
-      - curl
-      - git
-      - htop
-      - rsync
-      - tmux
-      - tree
-      - unzip
-      - vim
-      - wget
-
-    # Packages whose names differ per distro family. The 'package' module can
-    # abstract the package *manager*, but not the package *names* - so we look
-    # them up based on a fact instead.
-    family_packages:
-      Debian:
-        - bash-completion
-        - dnsutils
-        - net-tools
-      RedHat:
-        - bash-completion
-        - bind-utils
-        - net-tools
-      Suse:
-        - bash-completion
-        - bind-utils
-        - net-tools
-      Archlinux:
-        - bash-completion
-        - bind
-        - net-tools
-
-    # Packages to make sure are NOT installed.
-    unwanted_packages: []
-      # - telnet
-      # - nano
-
-    # System timezone. Use "timedatectl list-timezones" to see valid values.
-    system_timezone: Etc/UTC
-
-    # Administrative users to create. Each gets a home directory, is added to
-    # the distro's sudo group, and optionally gets an SSH public key installed.
-    # Set to an empty list ([]) to skip user management entirely.
-    admin_users:
-      - name: automation
-        comment: Automation account
-        ssh_key: ""   # e.g. "ssh-ed25519 AAAAC3Nza... you@example.com"
-
-    # If set, a cron job is installed so the machine re-runs ansible-pull on a
-    # schedule. Leave empty to skip. This should be the same URL you pass to -U.
-    ansible_pull_repo: ""
-    ansible_pull_schedule_minute: "*/30"
-
-  # ---------------------------------------------------------------------------
-  # Tasks
-  # ---------------------------------------------------------------------------
   tasks:
 
-    # -------------------------------------------------------------------------
-    # Sanity check - fail early and loudly on a distro we haven't accounted for,
-    # rather than halfway through with a confusing package error.
-    # -------------------------------------------------------------------------
-    - name: Confirm this distribution is supported by the playbook
-      ansible.builtin.assert:
-        that:
-          - ansible_facts['os_family'] in family_packages
-        fail_msg: >-
-          Unsupported OS family '{{ ansible_facts['os_family'] }}'.
-          Add it to the family_packages variable to support it.
-        success_msg: >-
-          Running on {{ ansible_facts['distribution'] }}
-          {{ ansible_facts['distribution_version'] }}
-          (family: {{ ansible_facts['os_family'] }},
-          package manager: {{ ansible_facts['pkg_mgr'] }})
-      tags:
-        - always
-
-    # -------------------------------------------------------------------------
-    # System updates
-    #
-    # This is the one place a fully generic module doesn't exist: the 'package'
-    # module can install and remove, but it has no "upgrade everything" mode.
-    # So we branch on the pkg_mgr fact and use the native module for each.
-    # -------------------------------------------------------------------------
-    - name: Apply pending system updates
-      when: perform_upgrade | bool
-      tags:
-        - updates
-      block:
-
-        - name: Upgrade all packages (apt)
-          ansible.builtin.apt:
-            upgrade: dist
-            update_cache: true
-            cache_valid_time: 3600
-            autoremove: true
-          when: ansible_facts['pkg_mgr'] == 'apt'
-
-        - name: Upgrade all packages (dnf / yum)
-          ansible.builtin.dnf:
-            name: "*"
-            state: latest  # noqa package-latest
-            update_cache: true
-          when: ansible_facts['pkg_mgr'] in ['dnf', 'dnf5', 'yum']
-
-        # ansible-core ships modules for apt and dnf but not for zypper or
-        # pacman - those live in the community.general collection, which isn't
-        # installed by default. To keep this playbook dependency-free we shell
-        # out instead, and tell Ansible how to decide whether anything changed.
-        # If you do have community.general available, community.general.zypper
-        # and community.general.pacman are the cleaner choice.
-        - name: Upgrade all packages (zypper)
-          ansible.builtin.command:
-            cmd: zypper --non-interactive update
-          register: zypper_upgrade
-          changed_when: "'Nothing to do.' not in zypper_upgrade.stdout"
-          when: ansible_facts['pkg_mgr'] == 'zypper'
-
-        - name: Upgrade all packages (pacman)
-          ansible.builtin.command:
-            cmd: pacman -Syu --noconfirm
-          register: pacman_upgrade
-          changed_when: "'there is nothing to do' not in pacman_upgrade.stdout"
-          when: ansible_facts['pkg_mgr'] == 'pacman'
-
-    # -------------------------------------------------------------------------
-    # Package installation
-    #
-    # 'ansible.builtin.package' picks the right package manager automatically,
-    # so these two tasks work everywhere without any conditionals.
-    # -------------------------------------------------------------------------
-    - name: Install common packages
+    - name: Install packages and keep them updated
       ansible.builtin.package:
-        name: "{{ common_packages }}"
-        state: present
-      tags:
-        - packages
+        name: "{{ packages }}"
+        state: latest
 
-    - name: Install packages specific to this distro family
-      ansible.builtin.package:
-        name: "{{ family_packages[ansible_facts['os_family']] }}"
-        state: present
-      tags:
-        - packages
-
-    - name: Remove unwanted packages
-      ansible.builtin.package:
-        name: "{{ unwanted_packages }}"
-        state: absent
-      when: unwanted_packages | length > 0
-      tags:
-        - packages
-
-    # -------------------------------------------------------------------------
-    # Timezone
-    #
-    # community.general.timezone would do this in one task, but it's a
-    # collection dependency. Managing the symlink directly keeps this playbook
-    # runnable on a bare ansible-core install.
-    # -------------------------------------------------------------------------
     - name: Set the system timezone
       ansible.builtin.file:
         src: "/usr/share/zoneinfo/{{ system_timezone }}"
         dest: /etc/localtime
         state: link
         force: true
-      tags:
-        - timezone
 
-    - name: Keep /etc/timezone in sync (Debian family only)
+    - name: Create the admin user
+      ansible.builtin.user:
+        name: "{{ admin_user }}"
+        groups: "{{ admin_group }}"
+        append: true
+        shell: /bin/bash
+        create_home: true
+
+    # "validate" runs the syntax check before the file is put in place. If
+    # there's a typo, the task fails and the file is never written - which is
+    # what keeps a mistake here from locking you out of sudo.
+    - name: Allow the admin group to use sudo without a password
       ansible.builtin.copy:
-        content: "{{ system_timezone }}\n"
-        dest: /etc/timezone
+        content: "%{{ admin_group }} ALL=(ALL) NOPASSWD: ALL\n"
+        dest: /etc/sudoers.d/99-ansible
         owner: root
         group: root
-        mode: "0644"
-      when: ansible_facts['os_family'] == 'Debian'
-      tags:
-        - timezone
+        mode: "0440"
+        validate: "visudo -cf %s"
 
-    # -------------------------------------------------------------------------
-    # User accounts
-    #
-    # The sudo group is named differently across distros, so we derive it from
-    # the os_family fact rather than hard-coding it.
-    # -------------------------------------------------------------------------
-    - name: Manage administrative users
-      when: admin_users | length > 0
-      tags:
-        - users
-      vars:
-        sudo_group: "{{ 'sudo' if ansible_facts['os_family'] == 'Debian' else 'wheel' }}"
-      block:
-
-        - name: Create administrative user accounts
-          ansible.builtin.user:
-            name: "{{ item.name }}"
-            comment: "{{ item.comment | default(omit) }}"
-            groups: "{{ sudo_group }}"
-            append: true
-            shell: /bin/bash
-            create_home: true
-            state: present
-          loop: "{{ admin_users }}"
-          loop_control:
-            label: "{{ item.name }}"
-
-        - name: Create .ssh directories
-          ansible.builtin.file:
-            path: "/home/{{ item.name }}/.ssh"
-            state: directory
-            owner: "{{ item.name }}"
-            group: "{{ item.name }}"
-            mode: "0700"
-          loop: "{{ admin_users }}"
-          loop_control:
-            label: "{{ item.name }}"
-          when: item.ssh_key | default('') | length > 0
-
-        # This writes authorized_keys outright, so it also removes any key that
-        # isn't listed here - which is usually what you want from a playbook
-        # that's the source of truth. If you'd rather add keys without touching
-        # existing ones, ansible.posix.authorized_key does that (collection).
-        - name: Install SSH public keys
-          ansible.builtin.copy:
-            content: "{{ item.ssh_key }}\n"
-            dest: "/home/{{ item.name }}/.ssh/authorized_keys"
-            owner: "{{ item.name }}"
-            group: "{{ item.name }}"
-            mode: "0600"
-          loop: "{{ admin_users }}"
-          loop_control:
-            label: "{{ item.name }}"
-          when: item.ssh_key | default('') | length > 0
-
-        - name: Allow passwordless sudo for the admin group
-          ansible.builtin.copy:
-            content: "%{{ sudo_group }} ALL=(ALL) NOPASSWD: ALL\n"
-            dest: /etc/sudoers.d/99-ansible-admins
-            owner: root
-            group: root
-            mode: "0440"
-            # 'validate' runs the check before the file is put in place. If the
-            # syntax is bad, the task fails and the file is never written - which
-            # is what keeps a typo here from locking you out of sudo.
-            validate: "visudo -cf %s"
-
-    # -------------------------------------------------------------------------
-    # A small configuration file, generated from facts. This is a stand-in for
-    # any config you'd manage - swap in a template from your repo when you're
-    # ready to use the 'template' module instead.
-    # -------------------------------------------------------------------------
+    # Facts gathered from the machine are available as variables, so files can
+    # be generated from what Ansible found rather than hard-coded.
     - name: Write a message of the day
       ansible.builtin.copy:
         content: |
           ***********************************************************
            {{ ansible_facts['hostname'] }} is managed by ansible-pull
-           Distribution : {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
-           Last applied : {{ ansible_date_time.iso8601 }}
-           Local changes will be reverted on the next pull.
+           {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+           Last applied: {{ ansible_date_time.iso8601 }}
           ***********************************************************
         dest: /etc/motd
         owner: root
         group: root
         mode: "0644"
-      tags:
-        - motd
 
-    # -------------------------------------------------------------------------
-    # Services
-    #
-    # The 'service' module is generic, but service *names* are not - OpenSSH is
-    # "ssh" on Debian/Ubuntu and "sshd" nearly everywhere else.
-    # -------------------------------------------------------------------------
-    - name: Ensure the SSH daemon is enabled and running
+    - name: Make sure the service is enabled and running
       ansible.builtin.service:
-        name: "{{ 'ssh' if ansible_facts['os_family'] == 'Debian' else 'sshd' }}"
+        name: "{{ managed_service }}"
         state: started
         enabled: true
-      tags:
-        - services
 
-    # -------------------------------------------------------------------------
-    # Schedule ansible-pull itself
-    #
-    # Skipped unless you set ansible_pull_repo. This is what turns a one-off
-    # run into a machine that continuously re-applies its own configuration.
-    # -------------------------------------------------------------------------
-    - name: Schedule recurring ansible-pull runs
+    # This is what turns a one-time run into a machine that keeps itself in
+    # sync: the playbook schedules the next ansible-pull run.
+    - name: Schedule ansible-pull to run every 30 minutes
       ansible.builtin.cron:
         name: ansible-pull
         user: root
-        minute: "{{ ansible_pull_schedule_minute }}"
-        job: >-
-          /usr/bin/ansible-pull -o -U {{ ansible_pull_repo }}
-          >> /var/log/ansible-pull.log 2>&1
+        minute: "*/30"
+        job: "/usr/bin/ansible-pull -o -U {{ ansible_pull_repo }} >> /var/log/ansible-pull.log 2>&1"
         cron_file: ansible-pull
       when: ansible_pull_repo | length > 0
-      tags:
-        - cron
-
-    # -------------------------------------------------------------------------
-    # Report whether the updates above require a reboot. This only reports -
-    # it deliberately doesn't reboot the machine out from under you.
-    # -------------------------------------------------------------------------
-    - name: Check for a pending reboot (Debian family)
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: deb_reboot
-      when: ansible_facts['os_family'] == 'Debian'
-      changed_when: false
-      tags:
-        - reboot
-
-    - name: Report pending reboot
-      ansible.builtin.debug:
-        msg: "A reboot is required to finish applying updates."
-      when:
-        - deb_reboot.stat is defined
-        - deb_reboot.stat.exists | default(false)
-      tags:
-        - reboot
